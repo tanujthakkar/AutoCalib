@@ -37,7 +37,7 @@ class CalibrateCamera:
 
 
             X, Y = np.meshgrid(np.linspace(0, num_pts_x - 1, num_pts_x), np.linspace(0, num_pts_y - 1, num_pts_y))
-            X = np.flip((X.reshape(54, 1) * box_size), axis=0)
+            X = (X.reshape(54, 1) * box_size)
             Y = (Y.reshape(54, 1) * box_size)
             M = np.float32(np.hstack((Y, X)))
 
@@ -86,4 +86,5 @@ class CalibrateCamera:
                       [0, 0, 1]])
 
         self.K = K
+        print(K)
         return K
