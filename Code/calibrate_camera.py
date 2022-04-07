@@ -28,6 +28,7 @@ class CalibrateCamera:
         self.img_set = create_image_set(data_dir)
         self.homography_set = list()
         self.K = None
+        self.Rt = None
 
     def __estimate_homography_set(self, box_size: float, num_pts_x: int, num_pts_y: int) -> np.array:
 
@@ -37,13 +38,14 @@ class CalibrateCamera:
 
 
             X, Y = np.meshgrid(np.linspace(0, num_pts_x - 1, num_pts_x), np.linspace(0, num_pts_y - 1, num_pts_y))
-            X = (X.reshape(54, 1) * box_size)
+            X = np.flip((X.reshape(54, 1) * box_size), axis=0)
             Y = (Y.reshape(54, 1) * box_size)
             M = np.float32(np.hstack((Y, X)))
 
             if ret:
                 corners = corners.reshape(-1, 2)
                 corners = cv2.cornerSubPix(img_gray, corners, (11, 11), (-1, -1), (cv2.TERM_CRITERIA_EPS+cv2.TERM_CRITERIA_MAX_ITER, 30, 0.01))
+                # corners = cv2.cornerSubPix(img_gray, corners, (5, 5), (-1, -1), (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001))
 
                 for corner in corners:
                     cv2.circle(img, (int(corner[0]), int(corner[1])), 2, (0,255,0), 2)
@@ -78,7 +80,7 @@ class CalibrateCamera:
         lambda_ = b_33 - ((b_13**2 + (v_0*(b_12*b_13 - b_11*b_23)))/b_11)
         alpha = np.sqrt(lambda_/b_11)
         beta = np.sqrt((lambda_*b_11)/(b_11*b_22 - b_12**2))
-        gamma = (-b_12*(alpha**2)*beta)/lambda_
+        gamma = -b_12*((alpha**2)*beta)/lambda_
         u_0 = (gamma*v_0/beta) - (b_13*(alpha**2)/lambda_)
 
         K = np.array([[alpha, gamma, u_0],
@@ -88,3 +90,24 @@ class CalibrateCamera:
         self.K = K
         print(K)
         return K
+
+    def estimate_extrinsics_set(self) -> np.array:
+
+        def estimate_extrinsics(homography: np.array, K: np.array) -> np.array:
+
+            K_inv = np.linalg.inv(K)
+            lambda_ = 1/np.linalg.norm(np.dot(K_inv, homography[:,0]))
+
+            Rt = np.zeros([3,4])
+            Rt[:,0] = lambda_ * np.dot(K_inv, homography[:,0])
+            Rt[:,1] = lambda_ * np.dot(K_inv, homography[:,1])
+            Rt[:,2] = np.matmul(Rt[:,0], Rt[:,1])
+            Rt[:,3] = lambda_ * np.dot(K_inv, homography[:,2])
+
+            return Rt
+
+        Rt = np.empty([0,3,4])
+        for homography in self.homography_set:
+            Rt = np.insert(Rt, len(Rt), estimate_extrinsics(homography, self.K), axis=0)
+
+        print(Rt, Rt.shape)
