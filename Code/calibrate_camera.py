@@ -27,11 +27,11 @@ class CalibrateCamera:
     def __init__(self, data_dir: str) -> None:
         self.img_set = create_image_set(data_dir)
         self.homography_set = list()
+        self.K = None
 
     def __estimate_homography_set(self, box_size: float, num_pts_x: int, num_pts_y: int) -> np.array:
 
         for img in self.img_set:
-            img = cv2.resize(img, None, fx=0.2, fy=0.2, interpolation=cv2.INTER_CUBIC)
             img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             ret, corners = cv2.findChessboardCorners(img_gray, (num_pts_x, num_pts_y), None)
 
@@ -54,6 +54,36 @@ class CalibrateCamera:
         self.homography_set = np.array(self.homography_set)
         return self.homography_set
 
-    def estimate_intrinsics(self):
+    def estimate_intrinsics(self) -> np.array:
 
         self.__estimate_homography_set(21.5, 9, 6)
+
+        def v_ij(homography: np.array, i: int, j: int) -> np.array:
+            return np.array([homography[0,i] * homography[0,j],
+                             homography[0,i] * homography[1,j] + homography[1,i] * homography[0,j],
+                             homography[1,i] * homography[1,j],
+                             homography[2,i] * homography[0,j] + homography[0,i] * homography[2,j],
+                             homography[2,i] * homography[1,j] + homography[1,i] * homography[2,j],
+                             homography[2,i] * homography[2,j]]).reshape(-1, 1)
+
+        V = np.empty([0,6])
+        for i, homography in enumerate(self.homography_set):
+            V = np.append(V, v_ij(homography, 0, 1).transpose(), axis=0)
+            V = np.append(V, np.subtract(v_ij(homography, 0, 0), v_ij(homography, 1, 1)).transpose(), axis=0)
+
+        U, S, V_t = np.linalg.svd(V)
+        b_11, b_12, b_22, b_13, b_23, b_33 = V_t[-1]
+
+        v_0 = (b_12*b_13 - b_11*b_23)/(b_11*b_22 - b_12**2)
+        lambda_ = b_33 - ((b_13**2 + (v_0*(b_12*b_13 - b_11*b_23)))/b_11)
+        alpha = np.sqrt(lambda_/b_11)
+        beta = np.sqrt((lambda_*b_11)/(b_11*b_22 - b_12**2))
+        gamma = (-b_12*(alpha**2)*beta)/lambda_
+        u_0 = (gamma*v_0/beta) - (b_13*(alpha**2)/lambda_)
+
+        K = np.array([[alpha, gamma, u_0],
+                      [0, beta, v_0],
+                      [0, 0, 1]])
+
+        self.K = K
+        return K
