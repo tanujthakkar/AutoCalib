@@ -9,3 +9,29 @@ Tanuj Thakkar (tanuj@umd.edu)
 M. Engg Robotics
 University of Maryland, College Park
 """
+
+import sys
+import cv2
+import os
+import numpy as np
+import time
+import argparse
+
+from utils import *
+from calibrate_camera import CalibrateCamera
+
+
+def main():
+	Parser = argparse.ArgumentParser()
+	Parser.add_argument('--DataDir', type=str, default="../Data/Calibration_Imgs", help='Path to calibration images folder')
+	Parser.add_argument('--Visualize', action='store_true', help='Toggle visualization')
+
+	Args = Parser.parse_args()
+	data_dir = Args.DataDir
+	visualize = Args.Visualize
+
+	CC = CalibrateCamera(data_dir)
+	CC.calibrate()
+
+if __name__ == '__main__':
+	main()
