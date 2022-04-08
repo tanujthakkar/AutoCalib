@@ -42,6 +42,7 @@ class CalibrateCamera:
             ret, corners = cv2.findChessboardCorners(img_gray, (num_pts_x, num_pts_y), None)
 
             X, Y = np.meshgrid(np.linspace(0, num_pts_x - 1, num_pts_x), np.linspace(0, num_pts_y - 1, num_pts_y))
+            # X = (X.reshape(54, 1) * box_size)
             X = np.flip((X.reshape(54, 1) * box_size), axis=0)
             Y = (Y.reshape(54, 1) * box_size)
             M = np.float32(np.hstack((Y, X)))
@@ -139,49 +140,35 @@ class CalibrateCamera:
             K = np.array([[K[0], K[1], K[2]],
                           [0, K[3], K[4]],
                           [0, 0, 1]])
-            # print("K:\n", K)
 
             m = m.reshape(3,1)
-            # print("m:\n", m)
 
             M_3D = np.array([M[0], M[1], 0, 1]).reshape(4, 1)
             M_ = np.dot(Rt, M_3D)
             M_ = M_/M_[-1]
-            # print("M_: \n", M_)
 
-            distortion_radius = np.sqrt(M_[0]**2 + M_[1]**2)[0]
-            # print("distortion_radius: ", distortion_radius)
+            distortion_radius = (M_[0]**2 + M_[1]**2)[0]
 
             m_ = np.dot(K, M_)
             m_ = m_/m_[-1]
-            # print("m_: \n", m_)
             u, v, _ = m_
             u_0, v_0 = K[0,2], K[1,2]
-            # print(u_0, v_0)
-            u_ = u + (u - u_0) * (k1 * distortion_radius**2 + k2 * distortion_radius**4)
-            v_ = v + (v - v_0) * (k1 * distortion_radius**2 + k2 * distortion_radius**4)
+            u_ = u + (u - u_0) * (k1*distortion_radius + k2*(distortion_radius**2))
+            v_ = v + (v - v_0) * (k1*distortion_radius + k2*(distortion_radius**2))
             m_ = np.array([u_[0], v_[0], 1]).reshape(3,1)
-            # print("m_: \n", m_)
-
+            
             return np.linalg.norm(np.subtract(m, m_), ord=2)
 
         def projection_loss(params: list, M: np.array, Rt: np.array) -> float:
-
             loss = 0
             for i, corners in enumerate(self.m):
                 for j, corner in enumerate(corners):
                     loss += projection_error(corner, M[j], params[:5], Rt[i], params[-2], params[-1])
 
-            # print(loss)
             return loss
 
-        print("H:\n", self.homography_set[0])
-        print("Rt:\n", self.Rt[0])
-        K_ = [self.K[0,0], self.K[0,1], self.K[0,2], self.K[1,1], self.K[1,2]]
-        print(projection_error(self.m[0,0], self.M[0], K_, self.Rt[0], 0, 0))
-
-        x = least_squares(fun=projection_loss, x0=[self.K[0,0], self.K[0,1], self.K[0,2], self.K[1,1], self.K[1,2], 0, 0], args=[self.M, self.Rt])
-        print(x)
+        params = least_squares(fun=projection_loss, x0=[self.K[0,0], self.K[0,1], self.K[0,2], self.K[1,1], self.K[1,2], 0, 0], args=[self.M, self.Rt])
+        print(params['x'])
 
     def calibrate(self):
         self.estimate_intrinsics()
