@@ -27,11 +27,13 @@ class CalibrateCamera:
 
     def __init__(self, data_dir: str) -> None:
         self.img_set = create_image_set(data_dir)
+        self.rect_img_set = None
         self.M = None
         self.m = None
         self.homography_set = list()
         self.K = None
         self.Rt = None
+        self.params = None
 
     def __estimate_homography_set(self, box_size: float, num_pts_x: int, num_pts_y: int) -> np.array:
 
@@ -48,17 +50,15 @@ class CalibrateCamera:
             M = np.float32(np.hstack((Y, X)))
             M = np.hstack((M, np.ones([1, len(M)]).transpose()))
             self.M = M
-            # print(M)
 
             if ret:
                 corners = corners.reshape(-1, 2)
                 corners = cv2.cornerSubPix(img_gray, corners, (11, 11), (-1, -1), (cv2.TERM_CRITERIA_EPS+cv2.TERM_CRITERIA_MAX_ITER, 30, 0.01))
                 corners = np.hstack((corners, np.ones([1, len(corners)]).transpose()))
                 m = np.insert(m, len(m), corners, axis=0)
-                # print(corners)
 
-                for corner in corners:
-                    cv2.circle(img, (int(corner[0]), int(corner[1])), 2, (0,255,0), 2)
+                # for corner in corners:
+                    # cv2.circle(img, (int(corner[0]), int(corner[1])), 2, (0,255,0), 2)
 
                 # cv2.imshow("", img)
                 # cv2.waitKey()
@@ -100,11 +100,11 @@ class CalibrateCamera:
                       [0, beta, v_0],
                       [0, 0, 1]])
 
-        self.K = K
-        print("K:\n", K)
+        # self.K = K
+        # print("K:\n", K)
         return K
 
-    def estimate_extrinsics_set(self) -> np.array:
+    def estimate_extrinsics_set(self, K:np.array) -> np.array:
 
         def estimate_extrinsics(homography: np.array, K: np.array) -> np.array:
 
@@ -129,48 +129,88 @@ class CalibrateCamera:
 
         Rt = np.empty([0,3,4])
         for homography in self.homography_set:
-            Rt = np.insert(Rt, len(Rt), estimate_extrinsics(homography, self.K), axis=0)
+            Rt = np.insert(Rt, len(Rt), estimate_extrinsics(homography, K), axis=0)
 
-        self.Rt = Rt
+        # self.Rt = Rt
         return Rt
 
+    def projection_error(self, m: np.array, M: np.array, K: list, Rt: np.array, k1: float, k2: float, img: np.array = None) -> float:
+        K = np.array([[K[0], K[1], K[2]],
+                      [0, K[3], K[4]],
+                      [0, 0, 1]])
+
+        m = m.reshape(3,1)
+
+        M_3D = np.array([M[0], M[1], 0, 1]).reshape(4, 1)
+        M_ = np.dot(Rt, M_3D)
+        M_ = M_/M_[-1]
+
+        distortion_radius = (M_[0]**2 + M_[1]**2)[0]
+
+        m_ = np.dot(K, M_)
+        m_ = m_/m_[-1]
+        u, v, _ = m_
+        u_0, v_0 = K[0,2], K[1,2]
+        u_ = u + (u - u_0) * (k1*distortion_radius + k2*(distortion_radius**2))
+        v_ = v + (v - v_0) * (k1*distortion_radius + k2*(distortion_radius**2))
+        if(img is not None):
+            cv2.circle(img, (int(u_[0]), int(v_[0])), 2, (0,255,0), 2)
+        m_ = np.array([u_[0], v_[0], 1]).reshape(3,1)
+        
+        return np.linalg.norm(np.subtract(m, m_), ord=2)
+
+    def projection_loss(self, params: list, M: np.array, Rt: np.array, img: np.array = None) -> float:
+        loss = 0
+        for i, corners in enumerate(self.m):
+            for j, corner in enumerate(corners):
+                loss += self.projection_error(corner, M[j], params[:5], Rt[i], params[-2], params[-1], img)
+
+        return loss
+
     def optimize_params(self):
+        params = least_squares(fun=self.projection_loss, x0=[self.K[0,0], self.K[0,1], self.K[0,2], self.K[1,1], self.K[1,2], 0, 0], args=[self.M, self.Rt, None])
 
-        def projection_error(m: np.array, M: np.array, K: list, Rt: np.array, k1: float, k2: float) -> float:
-            K = np.array([[K[0], K[1], K[2]],
-                          [0, K[3], K[4]],
-                          [0, 0, 1]])
+        self.params = params['x']
+        print(self.params)
+        return params
 
-            m = m.reshape(3,1)
+    def reprojection_img_loss(self, params: list, m:np.array, M: np.array, Rt: np.array, img: np.array = None) -> float:
+        loss = 0
+        for j, corner in enumerate(m):
+            loss += self.projection_error(corner, M[j], params[:5], Rt, params[-2], params[-1], img)
 
-            M_3D = np.array([M[0], M[1], 0, 1]).reshape(4, 1)
-            M_ = np.dot(Rt, M_3D)
-            M_ = M_/M_[-1]
+        return loss
 
-            distortion_radius = (M_[0]**2 + M_[1]**2)[0]
+    def reprojection_error(self):
+        # rect_K = np.array([[self.params[0], self.params[1], self.params[2]],
+        #               [0, self.params[3], self.params[4]],
+        #               [0, 0, 1]])
+        # kc = np.array([self.params[5], self.params[6], 0., 0.])
+        
+        rect_K = self.K
+        kc = np.array([2.26937511e-02, -1.42563484e-01, 0., 0.])
 
-            m_ = np.dot(K, M_)
-            m_ = m_/m_[-1]
-            u, v, _ = m_
-            u_0, v_0 = K[0,2], K[1,2]
-            u_ = u + (u - u_0) * (k1*distortion_radius + k2*(distortion_radius**2))
-            v_ = v + (v - v_0) * (k1*distortion_radius + k2*(distortion_radius**2))
-            m_ = np.array([u_[0], v_[0], 1]).reshape(3,1)
-            
-            return np.linalg.norm(np.subtract(m, m_), ord=2)
+        rect_Rt = self.estimate_extrinsics_set(rect_K)
 
-        def projection_loss(params: list, M: np.array, Rt: np.array) -> float:
-            loss = 0
-            for i, corners in enumerate(self.m):
-                for j, corner in enumerate(corners):
-                    loss += projection_error(corner, M[j], params[:5], Rt[i], params[-2], params[-1])
+        reprojection_loss = 0
+        for i, img in enumerate(self.img_set):
+            rect_img = cv2.undistort(img, rect_K, kc)
+            params = [rect_K[0,0], rect_K[0,1], rect_K[0,2], rect_K[1,1], rect_K[1,2], kc[0], kc[1]]
+            reprojection_loss += self.reprojection_img_loss(params, self.m[i], self.M, rect_Rt[i], rect_img)
+            # print(reprojection_loss)
 
-            return loss
+            # cv2.imshow("IMG", img)
+            # cv2.imshow("Undistorted", rect_img)
+            # cv2.imwrite('../Results/test.png', rect_img)
+            # cv2.waitKey()
 
-        params = least_squares(fun=projection_loss, x0=[self.K[0,0], self.K[0,1], self.K[0,2], self.K[1,1], self.K[1,2], 0, 0], args=[self.M, self.Rt])
-        print(params['x'])
+        reprojection_error = reprojection_loss/(len(self.m)*len(self.m[0]))
+        print(reprojection_error)
+
+        return reprojection_error
 
     def calibrate(self):
-        self.estimate_intrinsics()
-        self.estimate_extrinsics_set()
-        self.optimize_params()
+        self.K = self.estimate_intrinsics()
+        self.Rt = self.estimate_extrinsics_set(self.K)
+        # self.optimize_params()
+        self.reprojection_error()
