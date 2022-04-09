@@ -192,14 +192,6 @@ class CalibrateCamera:
         return loss
 
     def reprojection_error(self, rect_K: np.array, kc: np.array) -> float:
-        # rect_K = np.array([[self.params[0], self.params[1], self.params[2]],
-        #               [0, self.params[3], self.params[4]],
-        #               [0, 0, 1]])
-        # kc = np.array([self.params[5], self.params[6], 0., 0.])
-        
-        # rect_K = self.K
-        # kc = np.array([2.26937511e-02, -1.42563484e-01, 0., 0.])
-
         rect_Rt = self.estimate_extrinsics_set(rect_K)
 
         reprojection_loss = 0
