@@ -24,13 +24,15 @@ from calibrate_camera import CalibrateCamera
 def main():
 	Parser = argparse.ArgumentParser()
 	Parser.add_argument('--DataDir', type=str, default="../Data/Calibration_Imgs", help='Path to calibration images folder')
+	Parser.add_argument('--ResultDir', type=str, default="../Results/", help='Path to results folder')
 	Parser.add_argument('--Visualize', action='store_true', help='Toggle visualization')
 
 	Args = Parser.parse_args()
 	data_dir = Args.DataDir
+	result_dir = Args.ResultDir
 	visualize = Args.Visualize
 
-	CC = CalibrateCamera(data_dir)
+	CC = CalibrateCamera(data_dir, result_dir, visualize)
 	CC.calibrate()
 
 if __name__ == '__main__':

@@ -25,7 +25,7 @@ sys.dont_write_bytecode = True
 
 class CalibrateCamera:
 
-    def __init__(self, data_dir: str) -> None:
+    def __init__(self, data_dir: str, result_dir: str, visualize: bool = False) -> None:
         self.img_set = create_image_set(data_dir)
         self.rect_img_set = None
         self.M = None
@@ -34,11 +34,13 @@ class CalibrateCamera:
         self.K = None
         self.Rt = None
         self.params = None
+        self.result_dir = result_dir
+        self.visualize = visualize
 
     def __estimate_homography_set(self, box_size: float, num_pts_x: int, num_pts_y: int) -> np.array:
 
         m = np.empty([0,54,3])
-        for img in self.img_set:
+        for i, img in enumerate(self.img_set):
             # img = cv2.resize(img, None, fx=0.2, fy=0.2, interpolation=cv2.INTER_CUBIC)
             img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             ret, corners = cv2.findChessboardCorners(img_gray, (num_pts_x, num_pts_y), None)
@@ -57,9 +59,12 @@ class CalibrateCamera:
                 corners = np.hstack((corners, np.ones([1, len(corners)]).transpose()))
                 m = np.insert(m, len(m), corners, axis=0)
 
-                # for corner in corners:
-                    # cv2.circle(img, (int(corner[0]), int(corner[1])), 2, (0,255,0), 2)
+                img_ = np.copy(img)
+                # img_ = img
+                for corner in corners:
+                    cv2.circle(img_, (int(corner[0]), int(corner[1])), 4, (0,255,0), 4)
 
+                cv2.imwrite(os.path.join(self.result_dir, str(i) + '.png'), img_)
                 # cv2.imshow("", img)
                 # cv2.waitKey()
                 H = cv2.findHomography(M, corners)[0]
@@ -154,7 +159,7 @@ class CalibrateCamera:
         u_ = u + (u - u_0) * (k1*distortion_radius + k2*(distortion_radius**2))
         v_ = v + (v - v_0) * (k1*distortion_radius + k2*(distortion_radius**2))
         if(img is not None):
-            cv2.circle(img, (int(u_[0]), int(v_[0])), 2, (0,255,0), 2)
+            cv2.circle(img, (int(u_[0]), int(v_[0])), 4, (0,0,255), 4)
         m_ = np.array([u_[0], v_[0], 1]).reshape(3,1)
         
         return np.linalg.norm(np.subtract(m, m_), ord=2)
@@ -167,12 +172,17 @@ class CalibrateCamera:
 
         return loss
 
-    def optimize_params(self):
+    def optimize_params(self) -> np.array:
         params = least_squares(fun=self.projection_loss, x0=[self.K[0,0], self.K[0,1], self.K[0,2], self.K[1,1], self.K[1,2], 0, 0], args=[self.M, self.Rt, None])
 
         self.params = params['x']
-        print(self.params)
-        return params
+
+        rect_K = np.array([[self.params[0], self.params[1], self.params[2]],
+                      [0, self.params[3], self.params[4]],
+                      [0, 0, 1]])
+        kc = np.array([self.params[5], self.params[6], 0., 0.])
+
+        return rect_K, kc
 
     def reprojection_img_loss(self, params: list, m:np.array, M: np.array, Rt: np.array, img: np.array = None) -> float:
         loss = 0
@@ -181,14 +191,14 @@ class CalibrateCamera:
 
         return loss
 
-    def reprojection_error(self):
+    def reprojection_error(self, rect_K: np.array, kc: np.array) -> float:
         # rect_K = np.array([[self.params[0], self.params[1], self.params[2]],
         #               [0, self.params[3], self.params[4]],
         #               [0, 0, 1]])
         # kc = np.array([self.params[5], self.params[6], 0., 0.])
         
-        rect_K = self.K
-        kc = np.array([2.26937511e-02, -1.42563484e-01, 0., 0.])
+        # rect_K = self.K
+        # kc = np.array([2.26937511e-02, -1.42563484e-01, 0., 0.])
 
         rect_Rt = self.estimate_extrinsics_set(rect_K)
 
@@ -199,18 +209,33 @@ class CalibrateCamera:
             reprojection_loss += self.reprojection_img_loss(params, self.m[i], self.M, rect_Rt[i], rect_img)
             # print(reprojection_loss)
 
-            # cv2.imshow("IMG", img)
-            # cv2.imshow("Undistorted", rect_img)
-            # cv2.imwrite('../Results/test.png', rect_img)
-            # cv2.waitKey()
+            if(self.visualize):
+                cv2.imshow("Image", img)
+                cv2.imshow("Rectified Image", rect_img)
+                cv2.waitKey()
+
+            if(not os.path.exists(self.result_dir)):
+                os.makedirs(self.result_dir, exist_ok=True)
+            cv2.imwrite(os.path.join(self.result_dir, 'rectified_' + str(i) + '.png'), rect_img)
 
         reprojection_error = reprojection_loss/(len(self.m)*len(self.m[0]))
-        print(reprojection_error)
-
         return reprojection_error
 
     def calibrate(self):
+        print("\nEstimating initial calibration matrix...")
         self.K = self.estimate_intrinsics()
+        print("\nInitial Calbiration Matrix, K:\n", self.K)
+
+        print("\nEstimating estimating extrinsics...")
         self.Rt = self.estimate_extrinsics_set(self.K)
-        # self.optimize_params()
-        self.reprojection_error()
+
+        print("\nOptimizing parameters...")
+        rect_K, kc = self.optimize_params()
+        print("\nOptimized calibration matrix, K:\n", rect_K)
+        print("\nDistortion coefficients, kc:\n", kc[:3])
+
+        print("\nComputing reprojection error...")
+        rpr_err = self.reprojection_error(rect_K, kc)
+        print("\rReprojection Error: ", rpr_err)
+
+        print("Rectified images stored at: ", self.result_dir)
